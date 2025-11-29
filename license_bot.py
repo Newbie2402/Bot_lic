@@ -5,18 +5,19 @@ import string
 import base64
 import logging
 import requests
+from datetime import datetime, timedelta
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ==========================================================
-# CONFIG (diambil dari environment Railway)
+# CONFIG (diambil dari Railway ENV)
 # ==========================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "Newbie2402/wg-licenses")
 LICENSE_FILE_PATH = os.getenv("LICENSE_FILE_PATH", "licenses.json")
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", 1459150994))  # default fallback
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "1459150994"))
 
 if not BOT_TOKEN or not GITHUB_TOKEN:
     raise RuntimeError("ENV VAR BOT_TOKEN atau GITHUB_TOKEN tidak ditemukan!")
@@ -28,27 +29,22 @@ GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{LICENSE_
 
 
 # ==========================================================
-# HELPERS
+# GITHUB HELPERS
 # ==========================================================
-
 def github_get():
-    """Ambil file JSON dari GitHub"""
     headers = {"Authorization": f"Bearer {GITHUB_TOKEN}"}
     r = requests.get(GITHUB_API_URL, headers=headers, timeout=15)
     r.raise_for_status()
-
     data = r.json()
     decoded = base64.b64decode(data["content"]).decode("utf-8")
     return json.loads(decoded), data["sha"]
 
 
 def github_update(new_json, sha, message):
-    """Update JSON ke GitHub"""
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
-
     encoded = base64.b64encode(json.dumps(new_json, indent=2).encode()).decode()
 
     payload = {
@@ -72,6 +68,7 @@ def admin_only(func):
             await update.message.reply_text("⚠️ Kamu bukan admin!")
             return
         return await func(update, context)
+
     return wrapper
 
 
@@ -82,8 +79,9 @@ def admin_only(func):
 @admin_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "WG License Bot (Railway)\n\n"
-        "/gen <HWID> <device_limit>\n"
+        "WG License Bot Ready!\n\n"
+        "Commands:\n"
+        "/gen <HWID> <allowed_devices> <days>\n"
         "/ban <KEY>\n"
         "/unban <KEY>"
     )
@@ -91,12 +89,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2:
-        await update.message.reply_text("Format: /gen <HWID> <allowed_devices>")
+    if len(context.args) < 3:
+        await update.message.reply_text("Format: /gen <HWID> <allowed_devices> <days>")
         return
 
     hwid = context.args[0].upper()
     allowed = int(context.args[1])
+    days = int(context.args[2])
+
+    expire_at = (datetime.utcnow() + timedelta(days=days)).strftime("%Y-%m-%d")
 
     data, sha = github_get()
 
@@ -111,7 +112,8 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data["keys"][key] = {
         "allowed_devices": allowed,
         "devices": [hwid],
-        "banned": False
+        "banned": False,
+        "expire_at": expire_at
     }
 
     github_update(data, sha, f"Add key {key}")
@@ -120,7 +122,8 @@ async def cmd_gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ License dibuat!\n\n"
         f"Key: `{key}`\n"
         f"HWID pertama: `{hwid}`\n"
-        f"Max device: {allowed}",
+        f"Max device: {allowed}\n"
+        f"Expired: `{expire_at}`",
         parse_mode="Markdown"
     )
 
@@ -132,14 +135,14 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     key = context.args[0].strip()
-    data, sha = github_get()
 
+    data, sha = github_get()
     if key not in data.get("keys", {}):
-        await update.message.reply_text("Key tidak ditemukan.")
+        await update.message.reply_text("Key tidak ditemukan!")
         return
 
     data["keys"][key]["banned"] = True
-    github_update(data, sha, f"Ban key {key}")
+    github_update(data, sha, f"Ban {key}")
 
     await update.message.reply_text(f"🚫 Key `{key}` dibanned.", parse_mode="Markdown")
 
@@ -151,14 +154,14 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     key = context.args[0].strip()
-    data, sha = github_get()
 
+    data, sha = github_get()
     if key not in data.get("keys", {}):
-        await update.message.reply_text("Key tidak ditemukan.")
+        await update.message.reply_text("Key tidak ditemukan!")
         return
 
     data["keys"][key]["banned"] = False
-    github_update(data, sha, f"Unban key {key}")
+    github_update(data, sha, f"Unban {key}")
 
     await update.message.reply_text(f"✅ Key `{key}` di-unban.", parse_mode="Markdown")
 
@@ -166,9 +169,8 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================================
 # MAIN
 # ==========================================================
-
 if __name__ == "__main__":
-    logger.info("🚀 Starting WG License Bot on Railway…")
+    logger.info("🔥 Starting WG License Bot on Railway…")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
